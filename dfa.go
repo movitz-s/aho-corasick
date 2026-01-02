@@ -98,11 +98,12 @@ func (d *iDFABuilder) build(nfa *iNFA) iDFA {
 		rep.matches[id] = append(rep.matches[id], nfa.states[id].matches...)
 		fail := nfa.states[id].fail
 
-		nfa.iterAllTransitions(&byteClasses, stateID(id), func(tr *next) {
-			if tr.id == failedStateID {
-				tr.id = nfaNextStateMemoized(nfa, &rep, stateID(id), fail, tr.key)
+		nfa.iterAllTransitions(&byteClasses, stateID(id), func(tr next) {
+			nextID := tr.id
+			if nextID == failedStateID {
+				nextID = nfaNextStateMemoized(nfa, &rep, stateID(id), fail, tr.key)
 			}
-			rep.setNextState(stateID(id), tr.key, tr.id)
+			rep.setNextState(stateID(id), tr.key, nextID)
 		})
 
 	}

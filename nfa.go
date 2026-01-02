@@ -299,20 +299,20 @@ func (c *compiler) fillFailureTransitionsStandard() {
 		queue = queue[1:]
 		it := newIterTransitions(&c.nfa, id)
 
-		for next := it.next(); next != nil; next = it.next() {
-			if seen.contains(next.id) {
+		for tr, ok := it.next(); ok; tr, ok = it.next() {
+			if seen.contains(tr.id) {
 				continue
 			}
-			queue = append(queue, next.id)
-			seen.insert(next.id)
+			queue = append(queue, tr.id)
+			seen.insert(tr.id)
 
 			fail := it.nfa.state(id).fail
-			for it.nfa.state(fail).nextState(next.key) == failedStateID {
+			for it.nfa.state(fail).nextState(tr.key) == failedStateID {
 				fail = it.nfa.state(fail).fail
 			}
-			fail = it.nfa.state(fail).nextState(next.key)
-			it.nfa.state(next.id).fail = fail
-			it.nfa.copyMatches(fail, next.id)
+			fail = it.nfa.state(fail).nextState(tr.key)
+			it.nfa.state(tr.id).fail = fail
+			it.nfa.copyMatches(fail, tr.id)
 		}
 		it.nfa.copyEmptyMatches(id)
 	}
@@ -342,16 +342,16 @@ func (c *compiler) fillFailureTransitionsLeftmost() {
 		queue = queue[1:]
 		anyTrans := false
 		it := newIterTransitions(&c.nfa, item.id)
-		tr := it.next()
-		for tr != nil {
+		tr, ok := it.next()
+		for ok {
 			anyTrans = true
-			next := item.nextQueuedState(it.nfa, tr.id)
-			if seen.contains(next.id) {
-				tr = it.next()
+			nextQueued := item.nextQueuedState(it.nfa, tr.id)
+			if seen.contains(nextQueued.id) {
+				tr, ok = it.next()
 				continue
 			}
-			queue = append(queue, next)
-			seen.insert(next.id)
+			queue = append(queue, nextQueued)
+			seen.insert(nextQueued.id)
 
 			fail := it.nfa.state(item.id).fail
 			for it.nfa.state(fail).nextState(tr.key) == failedStateID {
@@ -359,22 +359,22 @@ func (c *compiler) fillFailureTransitionsLeftmost() {
 			}
 			fail = it.nfa.state(fail).nextState(tr.key)
 
-			if next.matchAtDepth != nil {
+			if nextQueued.matchAtDepth != nil {
 				failDepth := it.nfa.state(fail).depth
-				nextDepth := it.nfa.state(next.id).depth
-				if nextDepth-*next.matchAtDepth+1 > failDepth {
-					it.nfa.state(next.id).fail = deadStateID
-					tr = it.next()
+				nextDepth := it.nfa.state(nextQueued.id).depth
+				if nextDepth-*nextQueued.matchAtDepth+1 > failDepth {
+					it.nfa.state(nextQueued.id).fail = deadStateID
+					tr, ok = it.next()
 					continue
 				}
 
-				if start.id == it.nfa.state(next.id).fail {
+				if start.id == it.nfa.state(nextQueued.id).fail {
 					panic("states that are match states or follow match states should never have a failure transition back to the start state in leftmost searching")
 				}
 			}
-			it.nfa.state(next.id).fail = fail
-			it.nfa.copyMatches(fail, next.id)
-			tr = it.next()
+			it.nfa.state(nextQueued.id).fail = fail
+			it.nfa.copyMatches(fail, nextQueued.id)
+			tr, ok = it.next()
 		}
 		if !anyTrans && it.nfa.state(item.id).isMatch() {
 			it.nfa.state(item.id).fail = deadStateID
@@ -405,7 +405,7 @@ func (n *iNFA) getTwo(i stateID, j stateID) (*state, *state) {
 	return &after[0], &before[j]
 }
 
-func (n *iNFA) iterAllTransitions(byteClasses *byteClasses, id stateID, f func(tr *next)) {
+func (n *iNFA) iterAllTransitions(byteClasses *byteClasses, id stateID, f func(tr next)) {
 	n.states[id].trans.iterAll(byteClasses, f)
 }
 
@@ -428,18 +428,18 @@ type next struct {
 	id  stateID
 }
 
-func (i *iterTransitions) next() *next {
+func (i *iterTransitions) next() (next, bool) {
 	sparse := i.nfa.states[int(i.stateId)].trans.sparse
 	if sparse != nil {
 		if i.cur >= len(sparse.inner) {
-			return nil
+			return next{}, false
 		}
 		ii := i.cur
 		i.cur += 1
-		return &next{
+		return next{
 			key: sparse.inner[ii].b,
 			id:  sparse.inner[ii].s,
-		}
+		}, true
 	}
 
 	dense := i.nfa.states[int(i.stateId)].trans.dense
@@ -452,13 +452,13 @@ func (i *iterTransitions) next() *next {
 		id := dense.inner[b]
 		i.cur += 1
 		if id != failedStateID {
-			return &next{
+			return next{
 				key: b,
 				id:  id,
-			}
+			}, true
 		}
 	}
-	return nil
+	return next{}, false
 }
 
 type queuedSet struct {
@@ -682,18 +682,18 @@ type transitions struct {
 	dense  *dense
 }
 
-func sparseIter(trans []innerSparse, f func(*next)) {
+func sparseIter(trans []innerSparse, f func(next)) {
 	var byte16 uint16
 
 	for _, tr := range trans {
 		for byte16 < uint16(tr.b) {
-			f(&next{
+			f(next{
 				key: byte(byte16),
 				id:  failedStateID,
 			})
 			byte16 += 1
 		}
-		f(&next{
+		f(next{
 			key: tr.b,
 			id:  tr.s,
 		})
@@ -701,14 +701,14 @@ func sparseIter(trans []innerSparse, f func(*next)) {
 	}
 
 	for b := byte16; b < 256; b++ {
-		f(&next{
+		f(next{
 			key: byte(b),
 			id:  failedStateID,
 		})
 	}
 }
 
-func (t *transitions) iterAll(byteClasses *byteClasses, f func(tr *next)) {
+func (t *transitions) iterAll(byteClasses *byteClasses, f func(tr next)) {
 	if byteClasses.isSingleton() {
 		if t.sparse != nil {
 			sparseIter(t.sparse.inner, f)
@@ -716,7 +716,7 @@ func (t *transitions) iterAll(byteClasses *byteClasses, f func(tr *next)) {
 
 		if t.dense != nil {
 			for b := 0; b < 256; b++ {
-				f(&next{
+				f(next{
 					key: byte(b),
 					id:  t.dense.inner[b],
 				})
@@ -724,14 +724,15 @@ func (t *transitions) iterAll(byteClasses *byteClasses, f func(tr *next)) {
 		}
 	} else {
 		if t.sparse != nil {
-			var lastClass *byte
+			var lastClass byte
+			hasLastClass := false
 
-			sparseIter(t.sparse.inner, func(n *next) {
+			sparseIter(t.sparse.inner, func(n next) {
 				class := byteClasses.bytes[n.key]
 
-				if lastClass == nil || *lastClass != class {
-					cc := class
-					lastClass = &cc
+				if !hasLastClass || lastClass != class {
+					lastClass = class
+					hasLastClass = true
 					f(n)
 				}
 			})
@@ -745,7 +746,7 @@ func (t *transitions) iterAll(byteClasses *byteClasses, f func(tr *next)) {
 			}
 
 			for n := bcr.next(); n != nil; n = bcr.next() {
-				f(&next{
+				f(next{
 					key: *n,
 					id:  t.dense.inner[*n],
 				})
